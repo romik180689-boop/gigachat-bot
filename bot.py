@@ -244,7 +244,7 @@ async def start_web():
 
 
 async def main():
-    print("🤖 AI-бот на GigaChat запущен...")я	
+    print("🤖 AI-бот на GigaChat запущен...")
     asyncio.create_task(start_web())
     await dp.start_polling(bot)
 
