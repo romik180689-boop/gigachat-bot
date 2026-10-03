@@ -254,9 +254,10 @@ async def start_web():
 
 # ==================== ЗАПУСК ====================
 async def main():
+    await bot.delete_webhook(drop_pending_updates=True)
     print("AI-бот на GigaChat запущен...")
     asyncio.create_task(start_web())
-    await dp.start_polling(bot)
+    await dp.start_polling(bot, drop_pending_updates=True)
 
 
 if __name__ == "__main__":
