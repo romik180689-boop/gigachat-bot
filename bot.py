@@ -12,7 +12,7 @@ from aiogram.fsm.state import State, StatesGroup
 from gigachat import GigaChat
 from gigachat.models import Chat, Messages, MessagesRole
 from aiohttp import web
-
+import requests
 # ==================== НАСТРОЙКИ ====================
 BOT_TOKEN = os.environ.get("BOT_TOKEN") or ""
 GIGACHAT_KEY = os.environ.get("GIGACHAT_KEY") or ""
@@ -154,12 +154,6 @@ async def ask_draw(message: Message, state: FSMContext):
     await state.set_state(GenStates.waiting_draw)
 
 
-@dp.message(GenStates.waiting_draw, F.text == "❌ Отмена")
-async def cancel_draw(message: Message, state: FSMContext):
-    await state.clear()
-    await message.answer("Отменено.", reply_markup=main_kb())
-
-
 @dp.message(GenStates.waiting_draw)
 async def process_draw(message: Message, state: FSMContext):
     prompt = message.text.strip()
@@ -176,42 +170,20 @@ async def process_draw(message: Message, state: FSMContext):
     )
 
     try:
-        import re
-        payload = Chat(
-            messages=[
-                Messages(
-                    role=MessagesRole.SYSTEM,
-                    content="Ты — художник. Используй встроенную функцию text2image для генерации картинок.",
-                ),
-                Messages(role=MessagesRole.USER, content=f"Нарисуй: {prompt}"),
-            ],
-            function_call="auto",
+        import urllib.parse
+        encoded = urllib.parse.quote(prompt)
+        url = f"https://pollinations.ai/p/{encoded}?width=1024&height=1024&nologo=true&model=flux"
+
+        response = requests.get(url, timeout=60)
+        response.raise_for_status()
+
+        photo = BufferedInputFile(response.content, filename="image.jpg")
+
+        await message.answer_photo(
+            photo,
+            caption=f"🎨 <b>Готово!</b>\n\n<i>{prompt}</i>",
+            parse_mode="HTML",
         )
-
-        response = giga.chat(payload)
-        content = response.choices[0].message.content
-
-        match = re.search(r'<img src=\\"([^\\"]+)\\"', content)
-        if not match:
-            match = re.search(r'<img src="([^"]+)"', content)
-
-        if match:
-            file_id = match.group(1)
-            image_data = giga.get_image(file_id=file_id)
-
-            photo = BufferedInputFile(image_data.content, filename="image.jpg")
-
-            await message.answer_photo(
-                photo,
-                caption=f"🎨 <b>Готово!</b>\n\n<i>{prompt}</i>",
-                parse_mode="HTML",
-            )
-        else:
-            await message.answer(
-                f"⚠️ Картинка не сгенерировалась.\n\n"
-                f"Ответ AI: <i>{content[:500]}</i>",
-                parse_mode="HTML",
-            )
 
     except Exception as e:
         await message.answer(
@@ -219,7 +191,6 @@ async def process_draw(message: Message, state: FSMContext):
             f"Ошибка: <code>{e}</code>",
             parse_mode="HTML",
         )
-
 
 # ==================== ОТМЕНА ====================
 @dp.message(Command("cancel"))
