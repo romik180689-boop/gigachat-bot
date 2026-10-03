@@ -1,11 +1,11 @@
 import asyncio
-import uuid
 import os
 from aiogram import Bot, Dispatcher, F
 from aiogram.filters import Command
 from aiogram.types import (
     Message,
     ReplyKeyboardMarkup, KeyboardButton,
+    BufferedInputFile,
 )
 from aiogram.fsm.context import FSMContext
 from aiogram.fsm.state import State, StatesGroup
@@ -14,9 +14,10 @@ from gigachat.models import Chat, Messages, MessagesRole
 from aiohttp import web
 
 # ==================== НАСТРОЙКИ ====================
-BOT_TOKEN = os.environ.get("BOT_TOKEN") or "8765909727:AAG7zLQsce6_eoKjXBqTWHVX7IJ7wKf-kVw"
-GIGACHAT_KEY = os.environ.get("GIGACHAT_KEY") or "MDFhMTAzN2YtNDljZi03YzA5LThjZGQtODg4ZjFhZDgzZjk5OmQ2NDkyNGU2LTkxNzItNGQ3Ni1iYzQwLWNhYjliNjA5OTI2NA=="
+BOT_TOKEN = os.environ.get("BOT_TOKEN") or ""
+GIGACHAT_KEY = os.environ.get("GIGACHAT_KEY") or ""
 # ===================================================
+
 bot = Bot(token=BOT_TOKEN)
 dp = Dispatcher()
 
@@ -26,6 +27,7 @@ giga = GigaChat(
     model="GigaChat-2",
     verify_ssl_certs=False,
 )
+
 
 # ==================== КЛАВИАТУРЫ ====================
 def main_kb():
@@ -46,10 +48,11 @@ def cancel_kb():
 
 # ==================== FSM ====================
 class GenStates(StatesGroup):
-    waiting_prompt = State()
+    waiting_ai = State()
+    waiting_draw = State()
 
 
-# ==================== ХЕНДЛЕРЫ ====================
+# ==================== СТАРТ ====================
 @dp.message(Command("start"))
 async def cmd_start(message: Message):
     text = (
@@ -58,7 +61,8 @@ async def cmd_start(message: Message):
         "💬 Отвечать на любые вопросы\n"
         "🎨 Рисовать картинки по описанию\n\n"
         "━━━━━━━━━━━━━━━\n"
-        "Выбери действие 👇"
+        "Просто напиши мне что угодно — я отвечу!\n"
+        "Или выбери действие 👇"
     )
     await message.answer(text, parse_mode="HTML", reply_markup=main_kb())
 
@@ -68,19 +72,71 @@ async def about(message: Message):
     await message.answer(
         "ℹ️ <b>О боте</b>\n\n"
         "Этот бот использует нейросеть GigaChat от Сбера.\n\n"
-        "💬 <b>Спросить AI</b> — задай любой вопрос, бот ответит.\n"
-        "🎨 <b>Нарисовать картинку</b> — опиши, что нарисовать.\n\n"
-        "━━━━━━━━━━━━━━━\n"
-        "Работает бесплатно для физических лиц 🎉",
+        "💬 <b>Спросить AI</b> — задай любой вопрос.\n"
+        "🎨 <b>Нарисовать картинку</b> — опиши, что нарисовать.\n"
+        "💭 Или просто напиши сообщение — я отвечу!",
         parse_mode="HTML",
     )
 
 
-# ==================== ТЕКСТОВЫЙ AI ====================
-Ошибка: <code>
+# ==================== ТЕКСТОВЫЙ AI (по кнопке) ====================
+@dp.message(F.text == "💬 Спросить AI")
+async def ask_ai(message: Message, state: FSMContext):
+    await message.answer(
+        "✍️ <b>Напиши свой вопрос</b>\n\n"
+        "Например: «Придумай смешную шутку про котов»\n\n"
+        "❌ /cancel — отменить",
+        parse_mode="HTML",
+        reply_markup=cancel_kb(),
+    )
+    await state.set_state(GenStates.waiting_ai)
+
+
+@dp.message(GenStates.waiting_ai, F.text == "❌ Отмена")
+async def cancel_ai(message: Message, state: FSMContext):
+    await state.clear()
+    await message.answer("Отменено.", reply_markup=main_kb())
+
+
+@dp.message(GenStates.waiting_ai)
+async def process_ai(message: Message, state: FSMContext):
+    prompt = message.text.strip()
+    if len(prompt) < 2:
+        await message.answer("❌ Слишком коротко. Напиши что-то ещё:")
+        return
+
+    await state.clear()
+
+    await message.answer(
+        "🤔 <b>Думаю...</b>\n\n⏳ Обычно это занимает 3-10 секунд",
+        parse_mode="HTML",
+        reply_markup=main_kb(),
+    )
+
+    try:
+        payload = Chat(
+            messages=[
+                Messages(
+                    role=MessagesRole.SYSTEM,
+                    content="Ты — полезный и дружелюбный помощник. Отвечай на русском языке.",
+                ),
+                Messages(role=MessagesRole.USER, content=prompt),
+            ],
+        )
+
+        response = giga.chat(payload)
+        answer = response.choices[0].message.content
+
+        if len(answer) > 4000:
+            for i in range(0, len(answer), 4000):
+                await message.answer(answer[i:i+4000])
+        else:
+            await message.answer(answer)
+
+    except Exception as e:
+        await message.answer(
             f"😔 <b>Не получилось</b>\n\n"
-            f"Ошибка: <code>{e}</code>\n\n"
-            f"Попробуй ещё раз.",
+            f"Ошибка: <code>{e}</code>",
             parse_mode="HTML",
         )
 
@@ -91,20 +147,24 @@ async def ask_draw(message: Message, state: FSMContext):
     await message.answer(
         "🎨 <b>Опиши, что нарисовать</b>\n\n"
         "Например: «Кот в космосе, реализм»\n\n"
-        "⚠️ Генерация картинок может быть недоступна на бесплатном тарифе.\n\n"
         "❌ /cancel — отменить",
         parse_mode="HTML",
         reply_markup=cancel_kb(),
     )
-    await state.set_state(GenStates.waiting_prompt)
+    await state.set_state(GenStates.waiting_draw)
 
 
-@dp.message(GenStates.waiting_prompt)
+@dp.message(GenStates.waiting_draw, F.text == "❌ Отмена")
+async def cancel_draw(message: Message, state: FSMContext):
+    await state.clear()
+    await message.answer("Отменено.", reply_markup=main_kb())
+
+
+@dp.message(GenStates.waiting_draw)
 async def process_draw(message: Message, state: FSMContext):
     prompt = message.text.strip()
-
     if len(prompt) < 3:
-        await message.answer("❌ Слишком короткое описание. Напиши подробнее:")
+        await message.answer("❌ Слишком короткое описание:")
         return
 
     await state.clear()
@@ -116,9 +176,13 @@ async def process_draw(message: Message, state: FSMContext):
     )
 
     try:
+        import re
         payload = Chat(
             messages=[
-                Messages(role=MessagesRole.SYSTEM, content="Ты — художник. Если пользователь просит нарисовать, используй встроенную функцию text2image."),
+                Messages(
+                    role=MessagesRole.SYSTEM,
+                    content="Ты — художник. Используй встроенную функцию text2image для генерации картинок.",
+                ),
                 Messages(role=MessagesRole.USER, content=f"Нарисуй: {prompt}"),
             ],
             function_call="auto",
@@ -127,19 +191,14 @@ async def process_draw(message: Message, state: FSMContext):
         response = giga.chat(payload)
         content = response.choices[0].message.content
 
-        # Ищем ID картинки в ответе
-        import re
         match = re.search(r'<img src=\\"([^\\"]+)\\"', content)
         if not match:
             match = re.search(r'<img src="([^"]+)"', content)
 
         if match:
             file_id = match.group(1)
-
-            # Скачиваем картинку
             image_data = giga.get_image(file_id=file_id)
 
-            from aiogram.types import BufferedInputFile
             photo = BufferedInputFile(image_data.content, filename="image.jpg")
 
             await message.answer_photo(
@@ -149,8 +208,7 @@ async def process_draw(message: Message, state: FSMContext):
             )
         else:
             await message.answer(
-                "⚠️ GigaChat ответил, но картинка не сгенерировалась.\n\n"
-                "Скорее всего, генерация картинок недоступна на бесплатном тарифе.\n\n"
+                f"⚠️ Картинка не сгенерировалась.\n\n"
                 f"Ответ AI: <i>{content[:500]}</i>",
                 parse_mode="HTML",
             )
@@ -158,24 +216,73 @@ async def process_draw(message: Message, state: FSMContext):
     except Exception as e:
         await message.answer(
             f"😔 <b>Не получилось нарисовать</b>\n\n"
-            f"Ошибка: <code>{e}</code>\n\n"
-            f"Возможно, генерация картинок недоступна на бесплатном тарифе.",
+            f"Ошибка: <code>{e}</code>",
             parse_mode="HTML",
         )
 
 
+# ==================== ОТМЕНА ====================
 @dp.message(Command("cancel"))
 async def cancel_any(message: Message, state: FSMContext):
     await state.clear()
     await message.answer("Отменено.", reply_markup=main_kb())
 
 
-# ==================== ЗАПУСК ====================
-from aiohttp import web
-import os
+# ==================== СВОБОДНЫЙ ЧАТ (в самом конце!) ====================
+@dp.message(F.text & ~F.text.startswith("/"))
+async def free_chat(message: Message, state: FSMContext):
+    # Если активно FSM-состояние — не мешаем другим обработчикам
+    current_state = await state.get_state()
+    if current_state is not None:
+        return
 
+    prompt = message.text.strip()
+    if not prompt:
+        return
+
+    menu_buttons = [
+        "💬 Спросить AI",
+        "🎨 Нарисовать картинку",
+        "ℹ️ О боте",
+        "❌ Отмена",
+    ]
+    if prompt in menu_buttons:
+        return
+
+    await bot.send_chat_action(message.chat.id, "typing")
+
+    try:
+        payload = Chat(
+            messages=[
+                Messages(
+                    role=MessagesRole.SYSTEM,
+                    content="Ты — полезный и дружелюбный AI-помощник. Отвечай на русском языке.",
+                ),
+                Messages(role=MessagesRole.USER, content=prompt),
+            ],
+        )
+
+        response = giga.chat(payload)
+        answer = response.choices[0].message.content
+
+        if len(answer) > 4000:
+            for i in range(0, len(answer), 4000):
+                await message.answer(answer[i:i+4000])
+        else:
+            await message.answer(answer)
+
+    except Exception as e:
+        await message.answer(
+            f"😔 <b>Не получилось</b>\n\n"
+            f"Ошибка: <code>{e}</code>",
+            parse_mode="HTML",
+        )
+
+
+# ==================== ВЕБ-СЕРВЕР ДЛЯ RENDER ====================
 async def handle(request):
     return web.Response(text="Bot is alive!")
+
 
 async def start_web():
     app = web.Application()
@@ -186,8 +293,9 @@ async def start_web():
     await site.start()
 
 
+# ==================== ЗАПУСК ====================
 async def main():
-    print("🤖 AI-бот на GigaChat запущен...")
+    print("AI-бот на GigaChat запущен...")
     asyncio.create_task(start_web())
     await dp.start_polling(bot)
 
