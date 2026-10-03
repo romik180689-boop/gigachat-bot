@@ -77,64 +77,7 @@ async def about(message: Message):
 
 
 # ==================== ТЕКСТОВЫЙ AI ====================
-@dp.message(F.text == "💬 Спросить AI")
-async def ask_ai(message: Message, state: FSMContext):
-    await message.answer(
-        "✍️ <b>Напиши свой вопрос</b>\n\n"
-        "Например: «Придумай смешную шутку про котов»\n\n"
-        "❌ /cancel — отменить",
-        parse_mode="HTML",
-        reply_markup=cancel_kb(),
-    )
-    await state.set_state(GenStates.waiting_prompt)
-
-
-@dp.message(GenStates.waiting_prompt, F.text == "❌ Отмена")
-async def cancel_gen(message: Message, state: FSMContext):
-    await state.clear()
-    await message.answer("Отменено.", reply_markup=main_kb())
-
-
-@dp.message(GenStates.waiting_prompt)
-async def process_ai(message: Message, state: FSMContext):
-    prompt = message.text.strip()
-    if len(prompt) < 2:
-        await message.answer("❌ Слишком коротко. Напиши что-то ещё:")
-        return
-
-    await state.clear()
-
-    status = await message.answer(
-        "🤔 <b>Думаю...</b>\n\n⏳ Обычно это занимает 3-10 секунд",
-        parse_mode="HTML",
-        reply_markup=main_kb(),
-    )
-
-    try:
-        # Отправляем запрос в GigaChat
-        payload = Chat(
-            messages=[
-                Messages(role=MessagesRole.SYSTEM, content="Ты — полезный и дружелюбный помощник. Отвечай на русском языке."),
-                Messages(role=MessagesRole.USER, content=prompt),
-            ],
-        )
-
-        response = giga.chat(payload)
-        answer = response.choices[0].message.content
-
-        # Убираем лишние теги <img> если есть
-        import re
-        answer = re.sub(r'<img[^>]*>', '', answer).strip()
-
-        # Разбиваем на части, если ответ слишком длинный (лимит Telegram — 4096)
-        if len(answer) > 4000:
-            for i in range(0, len(answer), 4000):
-                await message.answer(answer[i:i+4000], parse_mode="HTML")
-        else:
-            await message.answer(answer, parse_mode="HTML")
-
-    except Exception as e:
-        await message.answer(
+Ошибка: <code>
             f"😔 <b>Не получилось</b>\n\n"
             f"Ошибка: <code>{e}</code>\n\n"
             f"Попробуй ещё раз.",
