@@ -142,18 +142,6 @@ async def process_ai(message: Message, state: FSMContext):
 
 
 # ==================== ГЕНЕРАЦИЯ КАРТИНОК ====================
-@dp.message(F.text == "🎨 Нарисовать картинку")
-async def ask_draw(message: Message, state: FSMContext):
-    await message.answer(
-        "🎨 <b>Опиши, что нарисовать</b>\n\n"
-        "Например: «Кот в космосе, реализм»\n\n"
-        "❌ /cancel — отменить",
-        parse_mode="HTML",
-        reply_markup=cancel_kb(),
-    )
-    await state.set_state(GenStates.waiting_draw)
-
-
 @dp.message(GenStates.waiting_draw)
 async def process_draw(message: Message, state: FSMContext):
     prompt = message.text.strip()
@@ -173,33 +161,9 @@ async def process_draw(message: Message, state: FSMContext):
         import urllib.parse
         encoded = urllib.parse.quote(prompt)
         url = f"https://pollinations.ai/p/{encoded}?width=1024&height=1024&nologo=true&model=flux"
-
-       headers = {
-            "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) "
-                          "AppleWebKit/537.36 (KHTML, like Gecko) "
-                          "Chrome/120.0.0.0 Safari/537.36"
-        }
+        headers = {"User-Agent": "Mozilla/5.0"}
         response = requests.get(url, timeout=60, headers=headers)
         response.raise_for_status()
-
-        content_type = response.headers.get("Content-Type", "")
-        print(f"Content-Type: {content_type}, размер: {len(response.content)} байт")
-
-        if "image" not in content_type:
-            await message.answer(
-                f"⚠️ Pollinations вернул не картинку.\n\n"
-                f"Тип: <code>{content_type}</code>\n"
-                f"Размер: {len(response.content)} байт\n\n"
-                f"Попробуй другой промпт."
-            )
-            return
-
-        if len(response.content) < 1000:
-            await message.answer(
-                f"⚠️ Картинка слишком маленькая ({len(response.content)} байт). "
-                f"Pollinations не справился. Попробуй ещё раз."
-            )
-            return
 
         photo = BufferedInputFile(response.content, filename="image.jpg")
 
