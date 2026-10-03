@@ -177,6 +177,25 @@ async def process_draw(message: Message, state: FSMContext):
         response = requests.get(url, timeout=60)
         response.raise_for_status()
 
+        content_type = response.headers.get("Content-Type", "")
+        print(f"Content-Type: {content_type}, размер: {len(response.content)} байт")
+
+        if "image" not in content_type:
+            await message.answer(
+                f"⚠️ Pollinations вернул не картинку.\n\n"
+                f"Тип: <code>{content_type}</code>\n"
+                f"Размер: {len(response.content)} байт\n\n"
+                f"Попробуй другой промпт."
+            )
+            return
+
+        if len(response.content) < 1000:
+            await message.answer(
+                f"⚠️ Картинка слишком маленькая ({len(response.content)} байт). "
+                f"Pollinations не справился. Попробуй ещё раз."
+            )
+            return
+
         photo = BufferedInputFile(response.content, filename="image.jpg")
 
         await message.answer_photo(
