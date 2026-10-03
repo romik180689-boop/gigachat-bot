@@ -174,7 +174,12 @@ async def process_draw(message: Message, state: FSMContext):
         encoded = urllib.parse.quote(prompt)
         url = f"https://pollinations.ai/p/{encoded}?width=1024&height=1024&nologo=true&model=flux"
 
-        response = requests.get(url, timeout=60)
+       headers = {
+            "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) "
+                          "AppleWebKit/537.36 (KHTML, like Gecko) "
+                          "Chrome/120.0.0.0 Safari/537.36"
+        }
+        response = requests.get(url, timeout=60, headers=headers)
         response.raise_for_status()
 
         content_type = response.headers.get("Content-Type", "")
