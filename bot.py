@@ -254,11 +254,39 @@ async def start_web():
 
 # ==================== ЗАПУСК ====================
 async def main():
+    import os as _os
+    import time as _time
+
+    # Файловая блокировка от двух инстансов
+    lock_file = "/tmp/bot.lock"
+
+    # Если файл существует и ему меньше 5 минут — другой процесс уже работает
+    if _os.path.exists(lock_file):
+        with open(lock_file, "r") as f:
+            try:
+                lock_time = float(f.read().strip())
+                if _time.time() - lock_time < 300:
+                    print("Другой процесс уже запущен. Выходим.")
+                    return
+            except Exception:
+                pass
+
+    # Создаём файл-блокировку
+    with open(lock_file, "w") as f:
+        f.write(str(_time.time()))
+
     await bot.delete_webhook(drop_pending_updates=True)
     print("AI-бот на GigaChat запущен...")
     asyncio.create_task(start_web())
-    await dp.start_polling(bot, drop_pending_updates=True)
 
+    try:
+        await dp.start_polling(bot, drop_pending_updates=True)
+    finally:
+        # Убираем блокировку при выходе
+        try:
+            _os.remove(lock_file)
+        except Exception:
+            pass
 
 if __name__ == "__main__":
     asyncio.run(main())
