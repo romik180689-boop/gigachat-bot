@@ -168,6 +168,7 @@ async def cancel_draw(message: Message, state: FSMContext):
 
 
 @dp.message(GenStates.waiting_draw)
+@dp.message(GenStates.waiting_draw)
 async def process_draw(message: Message, state: FSMContext):
     prompt = message.text.strip()
     if len(prompt) < 3:
@@ -183,22 +184,27 @@ async def process_draw(message: Message, state: FSMContext):
     )
 
     try:
-        import urllib.parse
-        encoded = urllib.parse.quote(prompt)
-       url = f"https://pollinations.ai/p/{encoded}?width=1024&height=1024&nologo=true&model=flux"
-        headers = {"User-Agent": "Mozilla/5.0"}
-        response = requests.get(url, headers=headers, timeout=90, allow_redirects=True)
+        HF_TOKEN = os.environ.get("HF_TOKEN", "")
+        if not HF_TOKEN:
+            await message.answer("⚠️ HF_TOKEN не настроен.")
+            return
 
-        if response.status_code != 200:
+        url = "https://api-inference.huggingface.co/models/stabilityai/stable-diffusion-xl-base-1.0"
+        headers = {"Authorization": f"Bearer {HF_TOKEN}"}
+        payload = {"inputs": prompt}
+
+        response = requests.post(url, headers=headers, json=payload, timeout=120)
+
+        if response.status_code == 503:
             await message.answer(
-                f"⚠️ Сервис вернул {response.status_code}.\n"
-                f"Подожди 20 секунд и попробуй ещё раз."
+                "⏳ Модель загружается. Подожди 30 секунд и повтори."
             )
             return
 
-        if len(response.content) < 1000:
+        if response.status_code != 200:
             await message.answer(
-                "⚠️ Картинка не сгенерировалась. Попробуй другой промпт."
+                f"⚠️ Hugging Face вернул {response.status_code}.\n"
+                f"Попробуй ещё раз."
             )
             return
 
@@ -216,7 +222,6 @@ async def process_draw(message: Message, state: FSMContext):
             f"Ошибка: <code>{e}</code>",
             parse_mode="HTML",
         )
-
 
 # ==================== ОТМЕНА ====================
 @dp.message(Command("cancel"))
