@@ -1,5 +1,6 @@
 import asyncio
 import os
+import requests
 from aiogram import Bot, Dispatcher, F
 from aiogram.filters import Command
 from aiogram.types import (
@@ -12,11 +13,12 @@ from aiogram.fsm.state import State, StatesGroup
 from gigachat import GigaChat
 from gigachat.models import Chat, Messages, MessagesRole
 from aiohttp import web
-import requests
+
 # ==================== НАСТРОЙКИ ====================
 BOT_TOKEN = os.environ.get("BOT_TOKEN")
 if not BOT_TOKEN:
-     raise Exception("BOT_TOKEN не задан в Environment!")
+    raise Exception("BOT_TOKEN не задан в Environment!")
+
 GIGACHAT_KEY = os.environ.get("GIGACHAT_KEY")
 if not GIGACHAT_KEY:
     raise Exception("GIGACHAT_KEY не задан в Environment!")
@@ -71,6 +73,7 @@ async def cmd_start(message: Message):
     await message.answer(text, parse_mode="HTML", reply_markup=main_kb())
 
 
+# ==================== О БОТЕ ====================
 @dp.message(F.text == "ℹ️ О боте")
 async def about(message: Message):
     await message.answer(
@@ -146,6 +149,24 @@ async def process_ai(message: Message, state: FSMContext):
 
 
 # ==================== ГЕНЕРАЦИЯ КАРТИНОК ====================
+@dp.message(F.text == "🎨 Нарисовать картинку")
+async def ask_draw(message: Message, state: FSMContext):
+    await message.answer(
+        "🎨 <b>Опиши, что нарисовать</b>\n\n"
+        "Например: «Кот в космосе, реализм»\n\n"
+        "❌ /cancel — отменить",
+        parse_mode="HTML",
+        reply_markup=cancel_kb(),
+    )
+    await state.set_state(GenStates.waiting_draw)
+
+
+@dp.message(GenStates.waiting_draw, F.text == "❌ Отмена")
+async def cancel_draw(message: Message, state: FSMContext):
+    await state.clear()
+    await message.answer("Отменено.", reply_markup=main_kb())
+
+
 @dp.message(GenStates.waiting_draw)
 async def process_draw(message: Message, state: FSMContext):
     prompt = message.text.strip()
@@ -156,7 +177,7 @@ async def process_draw(message: Message, state: FSMContext):
     await state.clear()
 
     await message.answer(
-        "🎨 <b>Рисую...</b>\n\n⏳ Это может занять 10-30 секунд",
+        "🎨 <b>Рисую...</b>\n\n⏳ Это может занять 10-40 секунд",
         parse_mode="HTML",
         reply_markup=main_kb(),
     )
@@ -164,7 +185,7 @@ async def process_draw(message: Message, state: FSMContext):
     try:
         HF_TOKEN = os.environ.get("HF_TOKEN", "")
         if not HF_TOKEN:
-            await message.answer("⚠️ HF_TOKEN не настроен.")
+            await message.answer("⚠️ HF_TOKEN не настроен в Render Environment.")
             return
 
         url = "https://api-inference.huggingface.co/models/stabilityai/stable-diffusion-xl-base-1.0"
@@ -176,7 +197,7 @@ async def process_draw(message: Message, state: FSMContext):
         if response.status_code != 200:
             await message.answer(
                 f"⚠️ Hugging Face вернул {response.status_code}.\n"
-                f"Попробуй ещё раз через минуту."
+                f"Подожди 30 секунд и попробуй ещё раз."
             )
             return
 
@@ -194,6 +215,8 @@ async def process_draw(message: Message, state: FSMContext):
             f"Ошибка: <code>{e}</code>",
             parse_mode="HTML",
         )
+
+
 # ==================== ОТМЕНА ====================
 @dp.message(Command("cancel"))
 async def cancel_any(message: Message, state: FSMContext):
@@ -204,7 +227,6 @@ async def cancel_any(message: Message, state: FSMContext):
 # ==================== СВОБОДНЫЙ ЧАТ (в самом конце!) ====================
 @dp.message(F.text & ~F.text.startswith("/"))
 async def free_chat(message: Message, state: FSMContext):
-    # Если активно FSM-состояние — не мешаем другим обработчикам
     current_state = await state.get_state()
     if current_state is not None:
         return
@@ -268,39 +290,10 @@ async def start_web():
 
 # ==================== ЗАПУСК ====================
 async def main():
-    import os as _os
-    import time as _time
-
-    # Файловая блокировка от двух инстансов
-    lock_file = "/tmp/bot.lock"
-
-    # Если файл существует и ему меньше 5 минут — другой процесс уже работает
-    if _os.path.exists(lock_file):
-        with open(lock_file, "r") as f:
-            try:
-                lock_time = float(f.read().strip())
-                if _time.time() - lock_time < 300:
-                    print("Другой процесс уже запущен. Выходим.")
-                    return
-            except Exception:
-                pass
-
-    # Создаём файл-блокировку
-    with open(lock_file, "w") as f:
-        f.write(str(_time.time()))
-
-    await bot.delete_webhook(drop_pending_updates=True)
     print("AI-бот на GigaChat запущен...")
     asyncio.create_task(start_web())
+    await dp.start_polling(bot, drop_pending_updates=True)
 
-    try:
-        await dp.start_polling(bot, drop_pending_updates=True)
-    finally:
-        # Убираем блокировку при выходе
-        try:
-            _os.remove(lock_file)
-        except Exception:
-            pass
 
 if __name__ == "__main__":
     asyncio.run(main())
