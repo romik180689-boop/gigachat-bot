@@ -168,7 +168,6 @@ async def cancel_draw(message: Message, state: FSMContext):
 
 
 @dp.message(GenStates.waiting_draw)
-@dp.message(GenStates.waiting_draw)
 async def process_draw(message: Message, state: FSMContext):
     prompt = message.text.strip()
     if len(prompt) < 3:
@@ -178,43 +177,70 @@ async def process_draw(message: Message, state: FSMContext):
     await state.clear()
 
     await message.answer(
-        "🎨 <b>Рисую...</b>\n\n⏳ Это может занять 10-40 секунд",
+        "🎨 <b>Рисую...</b>\n\n⏳ Это может занять 1-3 минуты (бесплатный сервис)",
         parse_mode="HTML",
         reply_markup=main_kb(),
     )
 
     try:
-        HF_TOKEN = os.environ.get("HF_TOKEN", "")
-        if not HF_TOKEN:
-            await message.answer("⚠️ HF_TOKEN не настроен.")
-            return
+        # 1. Отправляем задачу в Stable Horde
+        url = "https://stablehorde.net/api/v2/generate/async"
+        headers = {
+            "Content-Type": "application/json",
+            "apikey": "0000000000",  # анонимный ключ
+        }
+        payload = {
+            "prompt": prompt + " ### realistic, high quality, 4k",
+            "params": {
+                "width": 512,
+                "height": 512,
+                "steps": 20,
+                "n": 1,
+            },
+            "models": ["stable_diffusion"],
+        }
 
-        url = "https://api-inference.huggingface.co/models/stabilityai/stable-diffusion-xl-base-1.0"
-        headers = {"Authorization": f"Bearer {HF_TOKEN}"}
-        payload = {"inputs": prompt}
+        resp = requests.post(url, headers=headers, json=payload, timeout=30)
 
-        response = requests.post(url, headers=headers, json=payload, timeout=120)
-
-        if response.status_code == 503:
+        if resp.status_code != 202:
             await message.answer(
-                "⏳ Модель загружается. Подожди 30 секунд и повтори."
+                f"⚠️ Stable Horde вернул {resp.status_code}.\n"
+                f"Подожди минуту и попробуй ещё раз."
             )
             return
 
-        if response.status_code != 200:
-            await message.answer(
-                f"⚠️ Hugging Face вернул {response.status_code}.\n"
-                f"Попробуй ещё раз."
-            )
-            return
+        job_id = resp.json().get("id")
 
-        photo = BufferedInputFile(response.content, filename="image.jpg")
+        # 2. Ждём готовности (до 3 минут)
+        check_url = f"https://stablehorde.net/api/v2/generate/check/{job_id}"
 
-        await message.answer_photo(
-            photo,
-            caption=f"🎨 <b>Готово!</b>\n\n<i>{prompt}</i>",
-            parse_mode="HTML",
-        )
+        for _ in range(60):
+            await asyncio.sleep(3)
+            check = requests.get(check_url, timeout=15)
+            status = check.json()
+
+            if status.get("done"):
+                # 3. Получаем ссылку на картинку
+                status_url = f"https://stablehorde.net/api/v2/generate/status/{job_id}"
+                result = requests.get(status_url, timeout=15).json()
+                generations = result.get("generations", [])
+                if not generations:
+                    break
+
+                img_url = generations[0].get("img")
+                img = requests.get(img_url, timeout=30)
+
+                if img.status_code == 200 and len(img.content) > 1000:
+                    photo = BufferedInputFile(img.content, filename="image.jpg")
+                    await message.answer_photo(
+                        photo,
+                        caption=f"🎨 <b>Готово!</b>\n\n<i>{prompt}</i>",
+                        parse_mode="HTML",
+                    )
+                    return
+                break
+
+        await message.answer("⚠️ Сервис перегружен. Попробуй другой промпт или позже.")
 
     except Exception as e:
         await message.answer(
@@ -222,7 +248,6 @@ async def process_draw(message: Message, state: FSMContext):
             f"Ошибка: <code>{e}</code>",
             parse_mode="HTML",
         )
-
 # ==================== ОТМЕНА ====================
 @dp.message(Command("cancel"))
 async def cancel_any(message: Message, state: FSMContext):
