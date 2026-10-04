@@ -14,7 +14,7 @@ from gigachat.models import Chat, Messages, MessagesRole
 from aiohttp import web
 import requests
 # ==================== НАСТРОЙКИ ====================
-BOT_TOKEN = os.environ.get("BOT_TOKEN") or "8765909727:AAFCScdZ8aMhnvXLSATy5gB-6aR4WVUZsEo"
+BOT_TOKEN = os.environ.get("BOT_TOKEN") or "8765909727:AAEUvu2Si__vdIFcgNAR2L963MYTPtl3uYQ"
 GIGACHAT_KEY = os.environ.get("GIGACHAT_KEY") or "MDFhMTAzN2YtNDljZi03YzA5LThjZGQtODg4ZjFhZDgzZjk5OmQ2NDkyNGU2LTkxNzItNGQ3Ni1iYzQwLWNhYjliNjA5OTI2NA=="
 # ===================================================
 
