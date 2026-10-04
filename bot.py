@@ -185,8 +185,7 @@ async def process_draw(message: Message, state: FSMContext):
     try:
         import urllib.parse
         encoded = urllib.parse.quote(prompt)
-        url = f"https://image.pollinations.ai/prompt/{encoded}?width=1024&height=1024&nologo=true"
-
+       url = f"https://pollinations.ai/p/{encoded}?width=1024&height=1024&nologo=true&model=flux"
         headers = {"User-Agent": "Mozilla/5.0"}
         response = requests.get(url, headers=headers, timeout=90, allow_redirects=True)
 
