@@ -158,12 +158,23 @@ async def process_draw(message: Message, state: FSMContext):
     )
 
     try:
-        import urllib.parse
-        encoded = urllib.parse.quote(prompt)
-        url = f"https://pollinations.ai/p/{encoded}?width=1024&height=1024&nologo=true&model=flux"
-        headers = {"User-Agent": "Mozilla/5.0"}
-        response = requests.get(url, timeout=60, headers=headers)
-        response.raise_for_status()
+        HF_TOKEN = os.environ.get("HF_TOKEN", "")
+        if not HF_TOKEN:
+            await message.answer("⚠️ HF_TOKEN не настроен.")
+            return
+
+        url = "https://api-inference.huggingface.co/models/stabilityai/stable-diffusion-xl-base-1.0"
+        headers = {"Authorization": f"Bearer {HF_TOKEN}"}
+        payload = {"inputs": prompt}
+
+        response = requests.post(url, headers=headers, json=payload, timeout=120)
+
+        if response.status_code != 200:
+            await message.answer(
+                f"⚠️ Hugging Face вернул {response.status_code}.\n"
+                f"Попробуй ещё раз через минуту."
+            )
+            return
 
         photo = BufferedInputFile(response.content, filename="image.jpg")
 
@@ -179,7 +190,6 @@ async def process_draw(message: Message, state: FSMContext):
             f"Ошибка: <code>{e}</code>",
             parse_mode="HTML",
         )
-
 # ==================== ОТМЕНА ====================
 @dp.message(Command("cancel"))
 async def cancel_any(message: Message, state: FSMContext):
