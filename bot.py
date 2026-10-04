@@ -183,21 +183,23 @@ async def process_draw(message: Message, state: FSMContext):
     )
 
     try:
-        HF_TOKEN = os.environ.get("HF_TOKEN", "")
-        if not HF_TOKEN:
-            await message.answer("⚠️ HF_TOKEN не настроен в Render Environment.")
-            return
+        import urllib.parse
+        encoded = urllib.parse.quote(prompt)
+        url = f"https://image.pollinations.ai/prompt/{encoded}?width=1024&height=1024&nologo=true"
 
-        url = "https://api-inference.huggingface.co/models/stabilityai/stable-diffusion-xl-base-1.0"
-        headers = {"Authorization": f"Bearer {HF_TOKEN}"}
-        payload = {"inputs": prompt}
-
-        response = requests.post(url, headers=headers, json=payload, timeout=120)
+        headers = {"User-Agent": "Mozilla/5.0"}
+        response = requests.get(url, headers=headers, timeout=90, allow_redirects=True)
 
         if response.status_code != 200:
             await message.answer(
-                f"⚠️ Hugging Face вернул {response.status_code}.\n"
-                f"Подожди 30 секунд и попробуй ещё раз."
+                f"⚠️ Сервис вернул {response.status_code}.\n"
+                f"Подожди 20 секунд и попробуй ещё раз."
+            )
+            return
+
+        if len(response.content) < 1000:
+            await message.answer(
+                "⚠️ Картинка не сгенерировалась. Попробуй другой промпт."
             )
             return
 
