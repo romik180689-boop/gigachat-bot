@@ -477,44 +477,58 @@ async def handle_photo(message: Message):
     await bot.send_chat_action(message.chat.id, "typing")
 
     status = await message.answer(
-        "📸 <b>Смотрю на фото...</b>\n\n⏳ Анализирую",
+        "📸 <b>Смотрю на фото...</b>\n\n"
+        "🧠 Распознаю содержимое\n"
+        "⏳ Анализирую",
         parse_mode="HTML"
     )
 
     try:
         # 1. Скачиваем фото
-        photo = message.photo[-1]  # самое большое
+        photo = message.photo[-1]
         file_info = await bot.get_file(photo.file_id)
 
-        # Скачиваем в память
         from io import BytesIO
         file_bytes = BytesIO()
         await bot.download_file(file_info.file_path, file_bytes)
         file_bytes.seek(0)
 
-        # 2. Сохраняем во временный файл (GigaChat требует файл или base64)
-        import base64
-        img_base64 = base64.b64encode(file_bytes.read()).decode("utf-8")
-
-        # 3. Отправляем в GigaChat
-        user_text = message.caption or "Что на этом фото? Опиши подробно."
-
-        # GigaChat Vision через attachments
+        # 2. Сохраняем во временный файл
         import uuid
-        from gigachat.models import Chat, Messages, MessagesRole
-
-        # Временное сохранение для GigaChat
         img_filename = f"/tmp/{uuid.uuid4()}.jpg"
         with open(img_filename, "wb") as f:
-            file_bytes.seek(0)
             f.write(file_bytes.read())
 
-        # Загружаем файл в GigaChat
+        # 3. Загружаем в GigaChat
         with open(img_filename, "rb") as f:
             uploaded = giga.upload_file(f)
 
-        # Формируем запрос
+        # 4. Формируем запрос — умное поведение
+        if message.caption:
+            user_text = message.caption
+        else:
+            user_text = (
+                "Внимательно посмотри на изображение и выполни задачу:\n\n"
+                "📐 Если это МАТЕМАТИЧЕСКАЯ ЗАДАЧА, ПРИМЕР, УРАВНЕНИЕ — "
+                "реши её пошагово и напиши ПРАВИЛЬНЫЙ ОТВЕТ.\n"
+                "📖 Если это ТЕКСТ, ДОКУМЕНТ — распознай и объясни.\n"
+                "🖼 Если это ПРОСТО ФОТО (природа, животные, люди) — "
+                "опиши кратко.\n\n"
+                "Отвечай чётко, по делу, с эмодзи. Если задача — обязательно дай ОТВЕТ."
+            )
+
+        from gigachat.models import Chat, Messages, MessagesRole
         payload = Chat(messages=[
+            Messages(
+                role=MessagesRole.SYSTEM,
+                content=(
+                    "Ты — умный помощник. Умеешь решать математические задачи, "
+                    "распознавать текст с изображений и описывать фото. "
+                    "Отвечай на русском, кратко, с эмодзи. "
+                    "НЕ используй LaTeX, символы $ и $$. "
+                    "Для математики — пиши пошаговое решение и выделяй ОТВЕТ."
+                )
+            ),
             Messages(
                 role=MessagesRole.USER,
                 content=user_text,
@@ -525,11 +539,12 @@ async def handle_photo(message: Message):
         response = giga.chat(payload)
         answer = response.choices[0].message.content
 
-        # Чистим LaTeX
+        # 5. Чистим LaTeX
         import re
         answer = re.sub(r'\$\$.*?\$\$', '', answer, flags=re.DOTALL)
         answer = re.sub(r'\$.*?\$', '', answer, flags=re.DOTALL)
         answer = answer.replace('$', '')
+        answer = re.sub(r'\n\s*\n\s*\n', '\n\n', answer)
         answer = answer.strip()
 
         await status.delete()
@@ -538,7 +553,13 @@ async def handle_photo(message: Message):
             for i in range(0, len(answer), 4000):
                 await message.answer(answer[i:i+4000], reply_markup=main_menu() if i == 0 else None)
         else:
-            await message.answer(answer, reply_markup=main_menu())
+            await message.answer(
+                f"📸 <b>Анализ фото</b>\n"
+                f"━━━━━━━━━━━━━━━━━━━━━━\n\n"
+                f"{answer}",
+                parse_mode="HTML",
+                reply_markup=main_menu()
+            )
 
         # Удаляем временный файл
         import os as _os
@@ -550,8 +571,7 @@ async def handle_photo(message: Message):
     except Exception as e:
         await status.delete()
         await message.answer(
-            f"😔 <b>Ошибка</b>\n\n<code>{e}</code>\n\n"
-            f"<i>Возможно, твой тариф GigaChat не поддерживает работу с изображениями.</i>",
+            f"😔 <b>Ошибка</b>\n\n<code>{e}</code>",
             parse_mode="HTML",
             reply_markup=main_menu()
         )
