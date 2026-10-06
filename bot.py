@@ -281,4 +281,6 @@ async def generate_ai_answer(user_id, prompt):
 
     # Текущий промпт
     if search_results:
-        current = f"
+        current = f"Вопрос: {prompt}\n\n{search_results}\n\nОтветь на вопрос, используя эти данные."
+    else:
+        current = prompt
