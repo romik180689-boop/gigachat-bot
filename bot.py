@@ -471,7 +471,91 @@ async def free_chat(message: Message, state: FSMContext):
             reply_markup=main_menu()
         )
 
+# ==================== ОБРАБОТКА ФОТО ====================
+@dp.message(F.photo)
+async def handle_photo(message: Message):
+    await bot.send_chat_action(message.chat.id, "typing")
 
+    status = await message.answer(
+        "📸 <b>Смотрю на фото...</b>\n\n⏳ Анализирую",
+        parse_mode="HTML"
+    )
+
+    try:
+        # 1. Скачиваем фото
+        photo = message.photo[-1]  # самое большое
+        file_info = await bot.get_file(photo.file_id)
+
+        # Скачиваем в память
+        from io import BytesIO
+        file_bytes = BytesIO()
+        await bot.download_file(file_info.file_path, file_bytes)
+        file_bytes.seek(0)
+
+        # 2. Сохраняем во временный файл (GigaChat требует файл или base64)
+        import base64
+        img_base64 = base64.b64encode(file_bytes.read()).decode("utf-8")
+
+        # 3. Отправляем в GigaChat
+        user_text = message.caption or "Что на этом фото? Опиши подробно."
+
+        # GigaChat Vision через attachments
+        import uuid
+        from gigachat.models import Chat, Messages, MessagesRole
+
+        # Временное сохранение для GigaChat
+        img_filename = f"/tmp/{uuid.uuid4()}.jpg"
+        with open(img_filename, "wb") as f:
+            file_bytes.seek(0)
+            f.write(file_bytes.read())
+
+        # Загружаем файл в GigaChat
+        with open(img_filename, "rb") as f:
+            uploaded = giga.upload_file(f)
+
+        # Формируем запрос
+        payload = Chat(messages=[
+            Messages(
+                role=MessagesRole.USER,
+                content=user_text,
+                attachments=[uploaded.id_]
+            ),
+        ])
+
+        response = giga.chat(payload)
+        answer = response.choices[0].message.content
+
+        # Чистим LaTeX
+        import re
+        answer = re.sub(r'\$\$.*?\$\$', '', answer, flags=re.DOTALL)
+        answer = re.sub(r'\$.*?\$', '', answer, flags=re.DOTALL)
+        answer = answer.replace('$', '')
+        answer = answer.strip()
+
+        await status.delete()
+
+        if len(answer) > 4000:
+            for i in range(0, len(answer), 4000):
+                await message.answer(answer[i:i+4000], reply_markup=main_menu() if i == 0 else None)
+        else:
+            await message.answer(answer, reply_markup=main_menu())
+
+        # Удаляем временный файл
+        import os as _os
+        try:
+            _os.remove(img_filename)
+        except Exception:
+            pass
+
+    except Exception as e:
+        await status.delete()
+        await message.answer(
+            f"😔 <b>Ошибка</b>\n\n<code>{e}</code>\n\n"
+            f"<i>Возможно, твой тариф GigaChat не поддерживает работу с изображениями.</i>",
+            parse_mode="HTML",
+            reply_markup=main_menu()
+        )
+        
 # ==================== ВЕБ-СЕРВЕР ДЛЯ RENDER ====================
 async def handle(request):
     return web.Response(text="Bot is alive!")
