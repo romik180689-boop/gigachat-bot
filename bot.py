@@ -153,24 +153,45 @@ async def process_ai(message: Message, state: FSMContext):
     await state.clear()
 
     await message.answer(
-        "🤔 <b>Думаю...</b>\n\n⏳ Обычно это занимает 3-10 секунд",
+        "🤔 <b>Ищу информацию и думаю...</b>\n\n⏳ Обычно 5-15 секунд",
         parse_mode="HTML",
         reply_markup=main_kb(),
     )
 
     try:
+        search_results = search_web(prompt)
+
+        if search_results:
+            system_text = (
+                "Ты — современный AI-ассистент. Отвечай на русском языке, кратко. "
+                "Используй ТОЛЬКО актуальную информацию из интернета, которую тебе дали ниже. "
+                "Если в данных есть даты и события 2025-2026 — используй их, не отвечай старыми данными. "
+                "НЕ используй LaTeX, символы $ и $$."
+            )
+            user_text = f"Вопрос: {prompt}\n\n{search_results}\n\nОтветь на вопрос, используя эти данные."
+        else:
+            system_text = (
+                "Ты — современный AI-ассистент. Отвечай на русском языке, кратко. "
+                "НЕ используй LaTeX, символы $ и $$."
+            )
+            user_text = prompt
+
         payload = Chat(
             messages=[
-                Messages(
-                    role=MessagesRole.SYSTEM,
-                    content="Ты — полезный и дружелюбный помощник. Отвечай на русском языке.",
-                ),
-                Messages(role=MessagesRole.USER, content=prompt),
+                Messages(role=MessagesRole.SYSTEM, content=system_text),
+                Messages(role=MessagesRole.USER, content=user_text),
             ],
         )
 
         response = giga.chat(payload)
         answer = response.choices[0].message.content
+
+        import re
+        answer = re.sub(r'\$\$.*?\$\$', '', answer, flags=re.DOTALL)
+        answer = re.sub(r'\$.*?\$', '', answer, flags=re.DOTALL)
+        answer = answer.replace('$', '')
+        answer = re.sub(r'\n\s*\n\s*\n', '\n\n', answer)
+        answer = answer.strip()
 
         if len(answer) > 4000:
             for i in range(0, len(answer), 4000):
@@ -316,18 +337,39 @@ async def free_chat(message: Message, state: FSMContext):
     await bot.send_chat_action(message.chat.id, "typing")
 
     try:
+        search_results = search_web(prompt)
+
+        if search_results:
+            system_text = (
+                "Ты — современный AI-ассистент. Отвечай на русском языке, кратко. "
+                "Используй ТОЛЬКО актуальную информацию из интернета, которую тебе дали ниже. "
+                "Если в данных есть даты и события 2025-2026 — используй их, не отвечай старыми данными. "
+                "НЕ используй LaTeX, символы $ и $$."
+            )
+            user_text = f"Вопрос: {prompt}\n\n{search_results}\n\nОтветь на вопрос, используя эти данные."
+        else:
+            system_text = (
+                "Ты — современный AI-ассистент. Отвечай на русском языке, кратко. "
+                "НЕ используй LaTeX, символы $ и $$."
+            )
+            user_text = prompt
+
         payload = Chat(
             messages=[
-                Messages(
-                    role=MessagesRole.SYSTEM,
-                    content="Ты — полезный и дружелюбный AI-помощник. Отвечай на русском языке.",
-                ),
-                Messages(role=MessagesRole.USER, content=prompt),
+                Messages(role=MessagesRole.SYSTEM, content=system_text),
+                Messages(role=MessagesRole.USER, content=user_text),
             ],
         )
 
         response = giga.chat(payload)
         answer = response.choices[0].message.content
+
+        import re
+        answer = re.sub(r'\$\$.*?\$\$', '', answer, flags=re.DOTALL)
+        answer = re.sub(r'\$.*?\$', '', answer, flags=re.DOTALL)
+        answer = answer.replace('$', '')
+        answer = re.sub(r'\n\s*\n\s*\n', '\n\n', answer)
+        answer = answer.strip()
 
         if len(answer) > 4000:
             for i in range(0, len(answer), 4000):
@@ -341,21 +383,6 @@ async def free_chat(message: Message, state: FSMContext):
             f"Ошибка: <code>{e}</code>",
             parse_mode="HTML",
         )
-
-
-# ==================== ВЕБ-СЕРВЕР ДЛЯ RENDER ====================
-async def handle(request):
-    return web.Response(text="Bot is alive!")
-
-
-async def start_web():
-    app = web.Application()
-    app.router.add_get("/", handle)
-    runner = web.AppRunner(app)
-    await runner.setup()
-    site = web.TCPSite(runner, "0.0.0.0", int(os.environ.get("PORT", 8080)))
-    await site.start()
-
 
 # ==================== ЗАПУСК ====================
 async def main():
