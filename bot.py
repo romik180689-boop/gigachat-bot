@@ -23,7 +23,8 @@ BOT_TOKEN = os.environ.get("BOT_TOKEN")
 if not BOT_TOKEN:
     raise Exception("BOT_TOKEN не задан!")
 
-GIGACHAT_KEY = os.environ.get("GIGACHAT_KEY")if not GIGACHAT_KEY:
+GIGACHAT_KEY = os.environ.get("GIGACHAT_KEY")
+if not GIGACHAT_KEY:
     raise Exception("GIGACHAT_KEY не задан!")
 
 TAVILY_KEY = os.environ.get("TAVILY_KEY", "")
