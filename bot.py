@@ -539,11 +539,35 @@ async def handle_photo(message: Message):
         response = giga.chat(payload)
         answer = response.choices[0].message.content
 
-        # 5. Чистим LaTeX
+        # 5. Чистим LaTeX и формулы
         import re
+
+        # Убираем $$...$$ и $...$
         answer = re.sub(r'\$\$.*?\$\$', '', answer, flags=re.DOTALL)
         answer = re.sub(r'\$.*?\$', '', answer, flags=re.DOTALL)
         answer = answer.replace('$', '')
+
+        # Убираем \[ ... \] и \( ... \)
+        answer = re.sub(r'\\\[.*?\\\]', '', answer, flags=re.DOTALL)
+        answer = re.sub(r'\\\(.*?\\\)', '', answer, flags=re.DOTALL)
+
+        # Заменяем \frac{a}{b} на (a)/(b)
+        for _ in range(5):  # несколько проходов для вложенных
+            answer = re.sub(r'\\frac\{([^{}]*)\}\{([^{}]*)\}', r'(\1)/(\2)', answer)
+
+        # Заменяем \sqrt{x} на √(x)
+        answer = re.sub(r'\\sqrt\{([^{}]*)\}', r'√(\1)', answer)
+
+        # Заменяем \cdot на ×
+        answer = answer.replace('\\cdot', '×')
+
+        # Убираем оставшиеся \команды
+        answer = re.sub(r'\\[a-zA-Z]+', '', answer)
+
+        # Убираем лишние {} и \
+        answer = answer.replace('{', '').replace('}', '').replace('\\', '')
+
+        # Убираем пустые строки
         answer = re.sub(r'\n\s*\n\s*\n', '\n\n', answer)
         answer = answer.strip()
 
