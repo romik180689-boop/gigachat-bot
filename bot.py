@@ -229,7 +229,7 @@ async def cmd_clear(message: Message):
 # ==================== СТАРТ AI ====================
 @dp.callback_query(F.data == "menu_ai")
 async def cb_ai(call: CallbackQuery, state: FSMContext):
-    await call.message.edit_text(
+    await call.message.answer(
         "💬 <b>Напиши свой вопрос</b>\n\n"
         "🧠 Я поищу в интернете и дам актуальный ответ.\n\n"
         "❌ Отмена — кнопка ниже",
