@@ -60,6 +60,43 @@ class GenStates(StatesGroup):
 
 
 # ==================== СТАРТ ====================
+# ==================== ПОИСК В ИНТЕРНЕТЕ (TAVILY) ====================
+def search_web(query):
+    """Ищет в интернете через Tavily. Возвращает строку с результатами."""
+    try:
+        TAVILY_KEY = os.environ.get("TAVILY_KEY", "")
+        if not TAVILY_KEY:
+            print("TAVILY_KEY не задан")
+            return ""
+
+        url = "https://api.tavily.com/search"
+        payload = {
+            "api_key": TAVILY_KEY,
+            "query": query,
+            "search_depth": "basic",
+            "max_results": 5,
+            "include_answer": False,
+        }
+        resp = requests.post(url, json=payload, timeout=20)
+        if resp.status_code != 200:
+            print(f"Tavily ошибка: {resp.status_code} {resp.text[:200]}")
+            return ""
+
+        data = resp.json()
+        results = data.get("results", [])
+        if not results:
+            return ""
+
+        text = "Актуальная информация из интернета:\n\n"
+        for i, r in enumerate(results[:5], 1):
+            title = r.get("title", "")
+            content = r.get("content", "")[:300]
+            url_link = r.get("url", "")
+            text += f"{i}. {title}\n{content}\nИсточник: {url_link}\n\n"
+        return text
+    except Exception as e:
+        print(f"Ошибка поиска: {e}")
+        return ""
 @dp.message(Command("start"))
 async def cmd_start(message: Message):
     text = (
