@@ -2,11 +2,14 @@ import asyncio
 import os
 import requests
 import json
+import re
+import sqlite3
+from datetime import datetime
 from aiogram import Bot, Dispatcher, F
 from aiogram.filters import Command
 from aiogram.types import (
-    Message,
-    ReplyKeyboardMarkup, KeyboardButton,
+    Message, CallbackQuery,
+    InlineKeyboardMarkup, InlineKeyboardButton,
     BufferedInputFile,
 )
 from aiogram.fsm.context import FSMContext
@@ -18,39 +21,147 @@ from aiohttp import web
 # ==================== НАСТРОЙКИ ====================
 BOT_TOKEN = os.environ.get("BOT_TOKEN")
 if not BOT_TOKEN:
-    raise Exception("BOT_TOKEN не задан в Environment!")
+    raise Exception("BOT_TOKEN не задан!")
 
-GIGACHAT_KEY = os.environ.get("GIGACHAT_KEY")
-if not GIGACHAT_KEY:
-    raise Exception("GIGACHAT_KEY не задан в Environment!")
+GIGACHAT_KEY = os.environ.get("GIGACHAT_KEY")if not GIGACHAT_KEY:
+    raise Exception("GIGACHAT_KEY не задан!")
+
+TAVILY_KEY = os.environ.get("TAVILY_KEY", "")
+HORDE_API_KEY = os.environ.get("HORDE_API_KEY", "0000000000")
+DB_PATH = "manicure.db"
 # ===================================================
 
 bot = Bot(token=BOT_TOKEN)
 dp = Dispatcher()
 
+# GigaChat-2-Max
 giga = GigaChat(
     credentials=GIGACHAT_KEY,
     scope="GIGACHAT_API_PERS",
-    model="GigaChat-2",
+    model="GigaChat-2-Max",
     verify_ssl_certs=False,
 )
 
 
-# ==================== КЛАВИАТУРЫ ====================
-def main_kb():
-    kb = [
-        [KeyboardButton(text="💬 Спросить AI")],
-        [KeyboardButton(text="🎨 Нарисовать картинку")],
-        [KeyboardButton(text="ℹ️ О боте")],
-    ]
-    return ReplyKeyboardMarkup(keyboard=kb, resize_keyboard=True)
+# ==================== БАЗА ДАННЫХ ====================
+def init_db():
+    conn = sqlite3.connect(DB_PATH)
+    cur = conn.cursor()
+    cur.execute("""
+        CREATE TABLE IF NOT EXISTS history (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            user_id INTEGER,
+            role TEXT,
+            content TEXT,
+            created_at TEXT DEFAULT CURRENT_TIMESTAMP
+        )
+    """)
+    conn.commit()
+    conn.close()
 
 
-def cancel_kb():
-    return ReplyKeyboardMarkup(
-        keyboard=[[KeyboardButton(text="❌ Отмена")]],
-        resize_keyboard=True,
+def save_message(user_id, role, content):
+    conn = sqlite3.connect(DB_PATH)
+    cur = conn.cursor()
+    cur.execute(
+        "INSERT INTO history (user_id, role, content) VALUES (?, ?, ?)",
+        (user_id, role, content)
     )
+    conn.commit()
+    conn.close()
+
+
+def get_history(user_id, limit=10):
+    conn = sqlite3.connect(DB_PATH)
+    cur = conn.cursor()
+    cur.execute(
+        "SELECT role, content FROM history WHERE user_id = ? "
+        "ORDER BY id DESC LIMIT ?",
+        (user_id, limit)
+    )
+    rows = cur.fetchall()
+    conn.close()
+    return list(reversed(rows))
+
+
+def clear_history(user_id):
+    conn = sqlite3.connect(DB_PATH)
+    cur = conn.cursor()
+    cur.execute("DELETE FROM history WHERE user_id = ?", (user_id,))
+    conn.commit()
+    conn.close()
+
+
+# ==================== ПОИСК ====================
+def search_web(query):
+    if not TAVILY_KEY:
+        return ""
+    try:
+        url = "https://api.tavily.com/search"
+        payload = {
+            "api_key": TAVILY_KEY,
+            "query": query,
+            "search_depth": "basic",
+            "max_results": 3,
+            "include_answer": False,
+        }
+        resp = requests.post(url, json=payload, timeout=15)
+        if resp.status_code != 200:
+            return ""
+        results = resp.json().get("results", [])
+        if not results:
+            return ""
+        text = "Актуальные данные из интернета:\n\n"
+        for i, r in enumerate(results[:3], 1):
+            text += f"{i}. {r.get('title', '')}\n{r.get('content', '')[:250]}\n\n"
+        return text
+    except Exception as e:
+        print(f"Ошибка поиска: {e}")
+        return ""
+
+
+# ==================== УЛУЧШЕНИЕ ПРОМПТА ДЛЯ КАРТИНОК ====================
+def enhance_image_prompt(prompt):
+    """Переводит на английский и улучшает промпт через GigaChat."""
+    try:
+        sys_text = (
+            "Ты — эксперт по промптам для Stable Diffusion. "
+            "Твоя задача: перевести промпт на английский и добавить детали. "
+            "Ответь ТОЛЬКО английским промптом, без пояснений, без кавычек, без точек. "
+            "Пример: 'яблоко' → 'red juicy apple on wooden table, realistic, detailed, 4k, professional photography'"
+        )
+        user_text = f"Улучши промпт: {prompt}"
+        payload = Chat(messages=[
+            Messages(role=MessagesRole.SYSTEM, content=sys_text),
+            Messages(role=MessagesRole.USER, content=user_text),
+        ])
+        resp = giga.chat(payload)
+        enhanced = resp.choices[0].message.content.strip()
+        # Очистка
+        enhanced = enhanced.replace('"', '').replace("'", "").strip()
+        if len(enhanced) > 5:
+            return enhanced
+        return prompt
+    except Exception as e:
+        print(f"Ошибка улучшения промпта: {e}")
+        return prompt
+
+
+# ==================== КЛАВИАТУРЫ (INLINE) ====================
+def main_menu():
+    kb = [
+        [InlineKeyboardButton(text="💬 Спросить AI", callback_data="menu_ai")],
+        [InlineKeyboardButton(text="🎨 Нарисовать картинку", callback_data="menu_draw")],
+        [InlineKeyboardButton(text="🗑 Очистить диалог", callback_data="menu_clear")],
+        [InlineKeyboardButton(text="ℹ️ О боте", callback_data="menu_about")],
+    ]
+    return InlineKeyboardMarkup(inline_keyboard=kb)
+
+
+def cancel_menu():
+    return InlineKeyboardMarkup(inline_keyboard=[
+        [InlineKeyboardButton(text="❌ Отмена", callback_data="cancel_action")],
+    ])
 
 
 # ==================== FSM ====================
@@ -60,350 +171,114 @@ class GenStates(StatesGroup):
 
 
 # ==================== СТАРТ ====================
-# ==================== ПОИСК В ИНТЕРНЕТЕ (TAVILY) ====================
-def search_web(query):
-    """Ищет в интернете через Tavily. Возвращает строку с результатами."""
-    try:
-        TAVILY_KEY = os.environ.get("TAVILY_KEY", "")
-        if not TAVILY_KEY:
-            print("TAVILY_KEY не задан")
-            return ""
-
-        url = "https://api.tavily.com/search"
-        payload = {
-            "api_key": TAVILY_KEY,
-            "query": query,
-            "search_depth": "basic",
-            "max_results": 5,
-            "include_answer": False,
-        }
-        resp = requests.post(url, json=payload, timeout=20)
-        if resp.status_code != 200:
-            print(f"Tavily ошибка: {resp.status_code} {resp.text[:200]}")
-            return ""
-
-        data = resp.json()
-        results = data.get("results", [])
-        if not results:
-            return ""
-
-        text = "Актуальная информация из интернета:\n\n"
-        for i, r in enumerate(results[:5], 1):
-            title = r.get("title", "")
-            content = r.get("content", "")[:300]
-            url_link = r.get("url", "")
-            text += f"{i}. {title}\n{content}\nИсточник: {url_link}\n\n"
-        return text
-    except Exception as e:
-        print(f"Ошибка поиска: {e}")
-        return ""
 @dp.message(Command("start"))
 async def cmd_start(message: Message):
     text = (
-        "🤖 <b>Привет! Я — AI-бот на GigaChat!</b>\n\n"
-        "Я умею:\n"
-        "💬 Отвечать на любые вопросы\n"
-        "🎨 Рисовать картинки по описанию\n\n"
-        "━━━━━━━━━━━━━━━\n"
-        "Просто напиши мне что угодно — я отвечу!\n"
-        "Или выбери действие 👇"
+        "✨ <b>Привет! Я — AI-бот на GigaChat</b> ✨\n"
+        "━━━━━━━━━━━━━━━━━━━━━━\n\n"
+        "🧠 <b>Что я умею:</b>\n"
+        "  💬 Отвечать на любые вопросы\n"
+        "  🔍 Искать актуальную информацию\n"
+        "  🎨 Рисовать картинки\n"
+        "  📚 Помнить историю диалога\n\n"
+        "━━━━━━━━━━━━━━━━━━━━━━\n"
+        "💡 <i>Просто напиши сообщение — я отвечу!</i>\n"
+        "👇 <i>Или выбери действие в меню:</i>"
     )
-    await message.answer(text, parse_mode="HTML", reply_markup=main_kb())
+    await message.answer(text, parse_mode="HTML", reply_markup=main_menu())
 
 
 # ==================== О БОТЕ ====================
-@dp.message(F.text == "ℹ️ О боте")
-async def about(message: Message):
-    await message.answer(
-        "ℹ️ <b>О боте</b>\n\n"
-        "Этот бот использует нейросеть GigaChat от Сбера.\n\n"
-        "💬 <b>Спросить AI</b> — задай любой вопрос.\n"
-        "🎨 <b>Нарисовать картинку</b> — опиши, что нарисовать.\n"
-        "💭 Или просто напиши сообщение — я отвечу!",
+@dp.callback_query(F.data == "menu_about")
+async def cb_about(call: CallbackQuery):
+    text = (
+        "ℹ️ <b>О боте</b>\n"
+        "━━━━━━━━━━━━━━━━━━━━━━\n\n"
+        "🧠 <b>Модель:</b> GigaChat-2-Max\n"
+        "🔍 <b>Поиск:</b> Tavily\n"
+        "🎨 <b>Картинки:</b> AI Horde (Stable Diffusion)\n\n"
+        "━━━━━━━━━━━━━━━━━━━━━━\n"
+        "💬 Задавай вопросы на русском.\n"
+        "🎨 Описывай картинки подробно.\n"
+        "🗑 /clear — очистить историю диалога."
+    )
+    await call.message.edit_text(text, parse_mode="HTML", reply_markup=main_menu())
+    await call.answer()
+
+
+# ==================== ОЧИСТКА ====================
+@dp.callback_query(F.data == "menu_clear")
+async def cb_clear(call: CallbackQuery):
+    clear_history(call.from_user.id)
+    await call.message.edit_text(
+        "🗑 <b>История очищена!</b>\n\nНачнём с чистого листа ✨",
         parse_mode="HTML",
+        reply_markup=main_menu()
+    )
+    await call.answer("История очищена")
+
+
+@dp.message(Command("clear"))
+async def cmd_clear(message: Message):
+    clear_history(message.from_user.id)
+    await message.answer(
+        "🗑 <b>История очищена!</b>",
+        parse_mode="HTML",
+        reply_markup=main_menu()
     )
 
 
-# ==================== ТЕКСТОВЫЙ AI (по кнопке) ====================
-@dp.message(F.text == "💬 Спросить AI")
-async def ask_ai(message: Message, state: FSMContext):
-    await message.answer(
-        "✍️ <b>Напиши свой вопрос</b>\n\n"
-        "Например: «Придумай смешную шутку про котов»\n\n"
-        "❌ /cancel — отменить",
+# ==================== СТАРТ AI ====================
+@dp.callback_query(F.data == "menu_ai")
+async def cb_ai(call: CallbackQuery, state: FSMContext):
+    await call.message.edit_text(
+        "💬 <b>Напиши свой вопрос</b>\n\n"
+        "🧠 Я поищу в интернете и дам актуальный ответ.\n\n"
+        "❌ Отмена — кнопка ниже",
         parse_mode="HTML",
-        reply_markup=cancel_kb(),
+        reply_markup=cancel_menu()
     )
     await state.set_state(GenStates.waiting_ai)
+    await call.answer()
 
 
-@dp.message(GenStates.waiting_ai, F.text == "❌ Отмена")
-async def cancel_ai(message: Message, state: FSMContext):
+@dp.callback_query(F.data == "cancel_action")
+async def cb_cancel(call: CallbackQuery, state: FSMContext):
     await state.clear()
-    await message.answer("Отменено.", reply_markup=main_kb())
+    await call.message.edit_text(
+        "❌ Отменено.",
+        reply_markup=main_menu()
+    )
+    await call.answer()
 
 
-@dp.message(GenStates.waiting_ai)
-async def process_ai(message: Message, state: FSMContext):
-    prompt = message.text.strip()
-    if len(prompt) < 2:
-        await message.answer("❌ Слишком коротко. Напиши что-то ещё:")
-        return
+# ==================== ОТВЕТ AI ====================
+async def generate_ai_answer(user_id, prompt):
+    """Генерирует ответ GigaChat с поиском и историей."""
+    # Поиск в интернете
+    search_results = search_web(prompt)
 
-    await state.clear()
+    # История диалога
+    history = get_history(user_id, limit=10)
 
-    await message.answer(
-        "🤔 <b>Ищу информацию и думаю...</b>\n\n⏳ Обычно 5-15 секунд",
-        parse_mode="HTML",
-        reply_markup=main_kb(),
+    # Системный промпт
+    system_text = (
+        "Ты — современный AI-ассистент. Отвечай на русском, кратко, "
+        "с эмодзи для живости. Используй актуальную информацию из интернета. "
+        "Если есть данные 2025-2026 — используй их. "
+        "НЕ используй LaTeX, символы $ и $$."
     )
 
-    try:
-        search_results = search_web(prompt)
+    # Собираем сообщения
+    messages = [Messages(role=MessagesRole.SYSTEM, content=system_text)]
 
-        if search_results:
-            system_text = (
-                "Ты — современный AI-ассистент. Отвечай на русском языке, кратко. "
-                "Используй ТОЛЬКО актуальную информацию из интернета, которую тебе дали ниже. "
-                "Если в данных есть даты и события 2025-2026 — используй их, не отвечай старыми данными. "
-                "НЕ используй LaTeX, символы $ и $$."
-            )
-            user_text = f"Вопрос: {prompt}\n\n{search_results}\n\nОтветь на вопрос, используя эти данные."
+    # Добавляем историю
+    for role, content in history:
+        if role == "user":
+            messages.append(Messages(role=MessagesRole.USER, content=content))
         else:
-            system_text = (
-                "Ты — современный AI-ассистент. Отвечай на русском языке, кратко. "
-                "НЕ используй LaTeX, символы $ и $$."
-            )
-            user_text = prompt
+            messages.append(Messages(role=MessagesRole.ASSISTANT, content=content))
 
-        payload = Chat(
-            messages=[
-                Messages(role=MessagesRole.SYSTEM, content=system_text),
-                Messages(role=MessagesRole.USER, content=user_text),
-            ],
-        )
-
-        response = giga.chat(payload)
-        answer = response.choices[0].message.content
-
-        import re
-        answer = re.sub(r'\$\$.*?\$\$', '', answer, flags=re.DOTALL)
-        answer = re.sub(r'\$.*?\$', '', answer, flags=re.DOTALL)
-        answer = answer.replace('$', '')
-        answer = re.sub(r'\n\s*\n\s*\n', '\n\n', answer)
-        answer = answer.strip()
-
-        if len(answer) > 4000:
-            for i in range(0, len(answer), 4000):
-                await message.answer(answer[i:i+4000])
-        else:
-            await message.answer(answer)
-
-    except Exception as e:
-        await message.answer(
-            f"😔 <b>Не получилось</b>\n\n"
-            f"Ошибка: <code>{e}</code>",
-            parse_mode="HTML",
-        )
-
-
-# ==================== ГЕНЕРАЦИЯ КАРТИНОК ====================
-@dp.message(F.text == "🎨 Нарисовать картинку")
-async def ask_draw(message: Message, state: FSMContext):
-    await message.answer(
-        "🎨 <b>Опиши, что нарисовать</b>\n\n"
-        "Например: «Кот в космосе, реализм»\n\n"
-        "❌ /cancel — отменить",
-        parse_mode="HTML",
-        reply_markup=cancel_kb(),
-    )
-    await state.set_state(GenStates.waiting_draw)
-
-
-@dp.message(GenStates.waiting_draw, F.text == "❌ Отмена")
-async def cancel_draw(message: Message, state: FSMContext):
-    await state.clear()
-    await message.answer("Отменено.", reply_markup=main_kb())
-
-
-@dp.message(GenStates.waiting_draw)
-async def process_draw(message: Message, state: FSMContext):
-    prompt = message.text.strip()
-    if len(prompt) < 3:
-        await message.answer("❌ Слишком короткое описание:")
-        return
-
-    await state.clear()
-
-    await message.answer(
-        "🎨 <b>Рисую...</b>\n\n⏳ Это может занять 1-3 минуты (бесплатный сервис)",
-        parse_mode="HTML",
-        reply_markup=main_kb(),
-    )
-
-    try:
-        # 1. Отправляем задачу в Stable Horde
-        url = "https://stablehorde.net/api/v2/generate/async"
-        headers = {
-            "Content-Type": "application/json",
-            "apikey": "0000000000",  # анонимный ключ
-        }
-        payload = {
-            "prompt": prompt + " ### realistic, high quality, 4k",
-            "params": {
-                "width": 512,
-                "height": 512,
-                "steps": 20,
-                "n": 1,
-            },
-            "models": ["stable_diffusion"],
-        }
-
-        resp = requests.post(url, headers=headers, json=payload, timeout=30)
-
-        if resp.status_code != 202:
-            await message.answer(
-                f"⚠️ Stable Horde вернул {resp.status_code}.\n"
-                f"Подожди минуту и попробуй ещё раз."
-            )
-            return
-
-        job_id = resp.json().get("id")
-
-        # 2. Ждём готовности (до 3 минут)
-        check_url = f"https://stablehorde.net/api/v2/generate/check/{job_id}"
-
-        for _ in range(60):
-            await asyncio.sleep(3)
-            check = requests.get(check_url, timeout=15)
-            status = check.json()
-
-            if status.get("done"):
-                # 3. Получаем ссылку на картинку
-                status_url = f"https://stablehorde.net/api/v2/generate/status/{job_id}"
-                result = requests.get(status_url, timeout=15).json()
-                generations = result.get("generations", [])
-                if not generations:
-                    break
-
-                img_url = generations[0].get("img")
-                img = requests.get(img_url, timeout=30)
-
-                if img.status_code == 200 and len(img.content) > 1000:
-                    photo = BufferedInputFile(img.content, filename="image.jpg")
-                    await message.answer_photo(
-                        photo,
-                        caption=f"🎨 <b>Готово!</b>\n\n<i>{prompt}</i>",
-                        parse_mode="HTML",
-                    )
-                    return
-                break
-
-        await message.answer("⚠️ Сервис перегружен. Попробуй другой промпт или позже.")
-
-    except Exception as e:
-        await message.answer(
-            f"😔 <b>Не получилось нарисовать</b>\n\n"
-            f"Ошибка: <code>{e}</code>",
-            parse_mode="HTML",
-        )
-# ==================== ОТМЕНА ====================
-@dp.message(Command("cancel"))
-async def cancel_any(message: Message, state: FSMContext):
-    await state.clear()
-    await message.answer("Отменено.", reply_markup=main_kb())
-
-
-# ==================== СВОБОДНЫЙ ЧАТ (в самом конце!) ====================
-@dp.message(F.text & ~F.text.startswith("/"))
-async def free_chat(message: Message, state: FSMContext):
-    current_state = await state.get_state()
-    if current_state is not None:
-        return
-
-    prompt = message.text.strip()
-    if not prompt:
-        return
-
-    menu_buttons = [
-        "💬 Спросить AI",
-        "🎨 Нарисовать картинку",
-        "ℹ️ О боте",
-        "❌ Отмена",
-    ]
-    if prompt in menu_buttons:
-        return
-
-    await bot.send_chat_action(message.chat.id, "typing")
-
-    try:
-        search_results = search_web(prompt)
-
-        if search_results:
-            system_text = (
-                "Ты — современный AI-ассистент. Отвечай на русском языке, кратко. "
-                "Используй ТОЛЬКО актуальную информацию из интернета, которую тебе дали ниже. "
-                "Если в данных есть даты и события 2025-2026 — используй их, не отвечай старыми данными. "
-                "НЕ используй LaTeX, символы $ и $$."
-            )
-            user_text = f"Вопрос: {prompt}\n\n{search_results}\n\nОтветь на вопрос, используя эти данные."
-        else:
-            system_text = (
-                "Ты — современный AI-ассистент. Отвечай на русском языке, кратко. "
-                "НЕ используй LaTeX, символы $ и $$."
-            )
-            user_text = prompt
-
-        payload = Chat(
-            messages=[
-                Messages(role=MessagesRole.SYSTEM, content=system_text),
-                Messages(role=MessagesRole.USER, content=user_text),
-            ],
-        )
-
-        response = giga.chat(payload)
-        answer = response.choices[0].message.content
-
-        import re
-        answer = re.sub(r'\$\$.*?\$\$', '', answer, flags=re.DOTALL)
-        answer = re.sub(r'\$.*?\$', '', answer, flags=re.DOTALL)
-        answer = answer.replace('$', '')
-        answer = re.sub(r'\n\s*\n\s*\n', '\n\n', answer)
-        answer = answer.strip()
-
-        if len(answer) > 4000:
-            for i in range(0, len(answer), 4000):
-                await message.answer(answer[i:i+4000])
-        else:
-            await message.answer(answer)
-
-    except Exception as e:
-        await message.answer(
-            f"😔 <b>Не получилось</b>\n\n"
-            f"Ошибка: <code>{e}</code>",
-            parse_mode="HTML",
-        )
-
-# ==================== ВЕБ-СЕРВЕР ДЛЯ RENDER ====================
-async def handle(request):
-    return web.Response(text="Bot is alive!")
-
-
-async def start_web():
-    app = web.Application()
-    app.router.add_get("/", handle)
-    runner = web.AppRunner(app)
-    await runner.setup()
-    site = web.TCPSite(runner, "0.0.0.0", int(os.environ.get("PORT", 8080)))
-    await site.start()
-
-
-# ==================== ЗАПУСК ====================
-async def main():
-    print("AI-бот на GigaChat запущен...")
-    asyncio.create_task(start_web())
-    await dp.start_polling(bot, drop_pending_updates=True)
-
-
-if __name__ == "__main__":
-    asyncio.run(main())
+    # Текущий промпт
+    if search_results:
+        current = f"
